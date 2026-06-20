@@ -1,6 +1,12 @@
 ﻿pipeline {
     agent any
 
+    environment {
+        IMAGE_NAME = "mon-image"
+        IMAGE_TAG = "latest"
+        REGISTRY = "ghcr.io/TON_USER"
+    }
+
     stages {
 
         stage('Checkout') {
@@ -14,13 +20,53 @@
 
         stage('Build') {
             steps {
-                echo 'Build SentimentAI'
+                sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
             }
         }
 
         stage('Test') {
             steps {
-                echo 'Run tests'
+                sh """
+                docker run --rm \
+                    ${IMAGE_NAME}:${IMAGE_TAG} \
+                    pytest tests/ -v \
+                    --cov=src \
+                    --cov-report=xml:coverage.xml \
+                    --cov-report=term-missing \
+                    --cov-fail-under=70
+                """
+            }
+        }
+
+        stage('Build & Test Log') {
+            steps {
+                echo 'Build et tests terminés'
+            }
+        }
+
+        stage('Push') {
+            when {
+                branch 'main'
+            }
+
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'github-token',
+                    usernameVariable: 'REGISTRY_USER',
+                    passwordVariable: 'REGISTRY_PASS'
+                )]) {
+
+                    sh """
+                    echo ${REGISTRY_PASS} | docker login ghcr.io \
+                        -u ${REGISTRY_USER} --password-stdin
+
+                    docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+                    docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${REGISTRY}/${IMAGE_NAME}:latest
+
+                    docker push ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+                    docker push ${REGISTRY}/${IMAGE_NAME}:latest
+                    """
+                }
             }
         }
     }
