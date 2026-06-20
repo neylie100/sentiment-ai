@@ -18,29 +18,83 @@
             }
         }
 
-        stage('Build') {
+        stage('Build & Test') {
             steps {
-                sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
+                sh '''
+                # 1. Build de l'image Docker
+                docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+
+                # 2. Supprimer un éventuel conteneur test-runner résiduel
+                docker rm -f test-runner 2>/dev/null || true
+
+                # 3. Lancer les tests dans un conteneur nommé 'test-runner'
+                set +e
+                docker run \
+                  -e CI=true \
+                  --name test-runner \
+                  ${IMAGE_NAME}:${IMAGE_TAG} \
+                  pytest tests/ -v \
+                  --cov=src \
+                  --cov-report=xml:/tmp/coverage.xml \
+                  --cov-report=term-missing \
+                  --cov-fail-under=70
+                
+                # Récupération sécurisée du code de sortie des tests
+                TEST_EXIT_CODE=\$?
+                set -e
+
+                # 4. Copier coverage.xml depuis le conteneur vers le workspace Jenkins
+                docker cp test-runner:/tmp/coverage.xml ./coverage.xml 2>/dev/null || true
+
+                # 5. Nettoyer le conteneur de test
+                docker rm -f test-runner 2>/dev/null || true
+
+                # 6. Retourner le code de sortie des tests
+                exit \$TEST_EXIT_CODE
+                '''
+            }
+            post {
+                failure { 
+                    echo 'Tests échoués ou couverture de code insuffisante (< 70%)' 
+                }
             }
         }
 
-        stage('Test') {
+        stage('SonarQube Analysis') {
+            environment {
+                SONARQUBE_TOKEN = credentials('sonar-token')
+            }
             steps {
-                sh """
-                docker run --rm \
-                    ${IMAGE_NAME}:${IMAGE_TAG} \
-                    pytest tests/ -v \
-                    --cov=src \
-                    --cov-report=xml:coverage.xml \
-                    --cov-report=term-missing \
-                    --cov-fail-under=70
-                """
+                withSonarQubeEnv('sonarqube') {
+                    sh '''
+                    docker run --rm \
+                      --network cicd-network \
+                      --volumes-from jenkins \
+                      -w "$WORKSPACE" \
+                      -e SONAR_HOST_URL="$SONAR_HOST_URL" \
+                      -e SONAR_TOKEN="$SONARQUBE_TOKEN" \
+                      sonarsource/sonar-scanner-cli:latest \
+                      sonar-scanner \
+                      -Dsonar.projectKey=sentiment-ai \
+                      -Dsonar.projectName=SentimentAI \
+                      -Dsonar.projectBaseDir="$WORKSPACE" \
+                      -Dsonar.sources=src \
+                      -Dsonar.python.version=3.11 \
+                      -Dsonar.python.coverage.reportPaths=coverage.xml \
+                      -Dsonar.sourceEncoding=UTF-8 \
+                      -Dsonar.scanner.metadataFilePath=$WORKSPACE/report-task.txt
+                    '''
+                }
             }
         }
 
-        stage('Build & Test Log') {
+        stage('Quality Gate') {
             steps {
-                echo 'Build et tests terminés'
+                timeout(time: 15, unit: 'MINUTES') {
+                    // Attend le résultat asynchrone du Quality Gate SonarQube
+                    // abortPipeline: true => bloque Push et Deploy si le gate échoue
+                    waitForQualityGate abortPipeline: true
+                }
             }
         }
 
