@@ -1,0 +1,20 @@
+# Exclure Git
+.git/
+.github/
+
+# Exclure l'environnement virtuel
+.venv/
+
+# Exclure Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Exclure les tests et env
+.pytest_cache/
+.env
+.env.*
+
+# Exclure Terraform
+*.tfstate
+.terraform/
