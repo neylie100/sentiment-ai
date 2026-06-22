@@ -13,7 +13,7 @@ pipeline {
         }
         stage("Install Dependencies") {
             steps {
-                sh "pip install --break-system-packages -r requirements.txt"
+                sh "pip install --user -r requirements.txt"
             }
         }
         stage("Unit Tests") {
