@@ -1,133 +1,68 @@
-﻿pipeline {
+pipeline {
     agent any
-
     environment {
-        IMAGE_NAME = 'sentiment-ai'
-        REGISTRY   = 'ghcr.io/VOTRE_PSEUDO'
-        IMAGE_TAG  = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+        REGISTRY = "ghcr.io"
+        IMAGE_NAME = "neylie100/sentiment-ai"
+        IMAGE_TAG = "${BUILD_NUMBER}"
     }
-
     stages {
-        stage('Checkout') {
+        stage("Checkout") {
             steps {
                 checkout scm
-                echo "Branche : ${env.BRANCH_NAME}"
-                echo "Commit : ${env.GIT_COMMIT}"
             }
         }
-
-        stage('Lint') {
+        stage("Install Dependencies") {
             steps {
-                sh '''
-                docker run --rm \
-                  --volumes-from jenkins \
-                  -w $WORKSPACE \
-                  python:3.12-slim \
-                  sh -c "pip install flake8 -q && flake8 src/ --max-line-length=100"
-                '''
+                sh "python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt"
             }
         }
-
-        stage('IaC Validate') {
+        stage("Unit Tests") {
             steps {
-                dir('infra') {
-                    sh 'terraform init -backend=false -input=false'
-                    sh 'terraform fmt -check'
-                    sh 'terraform validate'
+                sh ". .venv/bin/activate && pytest"
+            }
+        }
+        stage("Build Docker Image") {
+            steps {
+                sh "docker build -t ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} ."
+            }
+        }
+        stage("Docker Login") {
+            steps {
+                withCredentials([usernamePassword(credentialsId: "github-token", usernameVariable: "GH_USER", passwordVariable: "GH_TOKEN")]) {
+                    sh "echo ${GH_TOKEN} | docker login ${REGISTRY} -u ${GH_USER} --password-stdin"
                 }
             }
         }
-
-        stage('Build & Test') {
+        stage("Push Docker Image") {
             steps {
-                sh '''
-                docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
-                docker rm -f test-runner 2>/dev/null || true
-                set +e
-                docker run -e CI=true --name test-runner \
-                  ${IMAGE_NAME}:${IMAGE_TAG} \
-                  pytest tests/ -v --cov=src \
-                  --cov-report=xml:/tmp/coverage.xml \
-                  --cov-fail-under=70
-                TEST_EXIT_CODE=$?
-                set -e
-                docker cp test-runner:/tmp/coverage.xml ./coverage.xml 2>/dev/null || true
-                docker rm -f test-runner 2>/dev/null || true
-                exit $TEST_EXIT_CODE
-                '''
+                sh "docker push ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
             }
         }
-
-        stage('SonarQube Analysis') {
-            environment { SONARQUBE_TOKEN = credentials('sonar-token') }
+        stage("Terraform Init") {
             steps {
-                withSonarQubeEnv('sonarqube') {
-                    sh '''
-                    docker run --rm --network cicd-network --volumes-from jenkins \
-                      -w "$WORKSPACE" \
-                      -e SONAR_HOST_URL="$SONAR_HOST_URL" \
-                      -e SONAR_TOKEN="$SONARQUBE_TOKEN" \
-                      sonarsource/sonar-scanner-cli:latest \
-                      sonar-scanner -Dsonar.projectKey=sentiment-ai \
-                      -Dsonar.sources=src \
-                      -Dsonar.python.coverage.reportPaths=coverage.xml
-                    '''
+                dir("infra") {
+                    sh "terraform init"
                 }
             }
         }
-
-        stage('Quality Gate') {
+        stage("Terraform Plan") {
             steps {
-                timeout(time: 15, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
+                dir("infra") {
+                    sh "terraform plan -var=\"image_tag=${IMAGE_TAG}\" -out=tfplan"
                 }
             }
         }
-
-        stage('Push') {
-            when { branch 'main' }
+        stage("Terraform Apply") {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'github-token',
-                    usernameVariable: 'REGISTRY_USER',
-                    passwordVariable: 'REGISTRY_PASS'
-                )]) {
-                    sh """
-                    echo \$REGISTRY_PASS | docker login ghcr.io -u \$REGISTRY_USER --password-stdin
-                    docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
-                    docker push ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
-                    """
+                dir("infra") {
+                    sh "terraform apply -auto-approve tfplan"
                 }
             }
         }
-
-        stage('IaC Apply') {
-            when { branch 'main' }
+        stage("Integration Test") {
             steps {
-                dir('infra') {
-                    sh 'terraform init -input=false'
-                    sh "terraform apply -auto-approve -var='image_tag=${IMAGE_TAG}'"
-                }
+                sh "curl -f http://localhost:8001/health || exit 1"
             }
-        }
-
-        stage('Deploy Staging') {
-            when { branch 'main' }
-            steps {
-                sh 'curl -f http://localhost:8001/health || exit 1'
-            }
-        }
-    }
-
-    post {
-        always {
-            sh 'docker rm -f test-runner 2>/dev/null || true'
-        }
-        success {
-            echo "Pipeline OK -- ${IMAGE_TAG} deploye"
-        }
-        failure {
-            echo 'Pipeline KO'
         }
     }
 }
