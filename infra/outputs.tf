@@ -1,16 +1,9 @@
-# infra/outputs.tf
-
-output "container_id" {
-  description = "ID du conteneur staging"
+﻿output "container_id" {
   value       = docker_container.sentiment_staging.id
+  description = "ID du conteneur de Staging"
 }
 
-output "app_url" {
-  description = "URL de l?application staging"
-  value       = "http://localhost:${var.app_port}"
-}
-
-output "network_name" {
-  description = "Nom du reseau Docker cree"
-  value       = docker_network.cicd.name
+output "staging_url" {
+  value       = "http://localhost:8001/health"
+  description = "URL de test de l'API de Staging"
 }
