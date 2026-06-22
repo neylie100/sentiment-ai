@@ -2,32 +2,24 @@
     agent any
 
     environment {
-        IMAGE_NAME = "mon-image"
+        IMAGE_NAME = "sentiment-ai"
         IMAGE_TAG = "latest"
         REGISTRY = "ghcr.io/TON_USER"
     }
 
     stages {
-
-        stage('Checkout') {
+        stage("Checkout") {
             steps {
                 checkout scm
-                echo "Branche : ${env.BRANCH_NAME}"
-                echo "Commit : ${env.GIT_COMMIT}"
-                sh 'git log --oneline -5'
+                sh "git log --oneline -5"
             }
         }
 
-        stage('Build & Test') {
+        stage("Build And Test") {
             steps {
-                sh '''
-                # 1. Build de l'image Docker
+                sh """
                 docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
-
-                # 2. Supprimer un éventuel conteneur test-runner résiduel
                 docker rm -f test-runner 2>/dev/null || true
-
-                # 3. Lancer les tests dans un conteneur nommé 'test-runner'
                 set +e
                 docker run \
                   -e CI=true \
@@ -36,37 +28,24 @@
                   pytest tests/ -v \
                   --cov=src \
                   --cov-report=xml:/tmp/coverage.xml \
-                  --cov-report=term-missing \
                   --cov-fail-under=70
                 
-                # Récupération sécurisée du code de sortie des tests
                 TEST_EXIT_CODE=\$?
                 set -e
-
-                # 4. Copier coverage.xml depuis le conteneur vers le workspace Jenkins
                 docker cp test-runner:/tmp/coverage.xml ./coverage.xml 2>/dev/null || true
-
-                # 5. Nettoyer le conteneur de test
                 docker rm -f test-runner 2>/dev/null || true
-
-                # 6. Retourner le code de sortie des tests
                 exit \$TEST_EXIT_CODE
-                '''
-            }
-            post {
-                failure { 
-                    echo 'Tests échoués ou couverture de code insuffisante (< 70%)' 
-                }
+                """
             }
         }
 
-        stage('SonarQube Analysis') {
+        stage("SonarQube Analysis") {
             environment {
-                SONARQUBE_TOKEN = credentials('sonar-token')
+                SONARQUBE_TOKEN = credentials("sonar-token")
             }
             steps {
-                withSonarQubeEnv('sonarqube') {
-                    sh '''
+                withSonarQubeEnv("sonarqube") {
+                    sh """
                     docker run --rm \
                       --network cicd-network \
                       --volumes-from jenkins \
@@ -83,20 +62,20 @@
                       -Dsonar.python.coverage.reportPaths=coverage.xml \
                       -Dsonar.sourceEncoding=UTF-8 \
                       -Dsonar.scanner.metadataFilePath=$WORKSPACE/report-task.txt
-                    '''
+                    """
                 }
             }
         }
 
-        stage('Quality Gate') {
+        stage("Quality Gate") {
             steps {
-                timeout(time: 15, unit: 'MINUTES') {
+                timeout(time: 15, unit: "MINUTES") {
                     waitForQualityGate abortPipeline: true
                 }
             }
         }
 
-        stage('Security Scan') {
+        stage("Security Scan") {
             steps {
                 sh """
                 docker run --rm \
@@ -109,33 +88,20 @@
                   ${IMAGE_NAME}:${IMAGE_TAG}
                 """
             }
-            post {
-                failure {
-                    echo 'Vulnérabilités CRITICAL ou HIGH détectées !'
-                    echo 'Corrigez les dépendances avant de déployer.'
-                }
-            }
         }
 
-        stage('Push') {
-            when {
-                branch 'main'
-            }
-
+        stage("Push") {
+            when { branch "main" }
             steps {
                 withCredentials([usernamePassword(
-                    credentialsId: 'github-token',
-                    usernameVariable: 'REGISTRY_USER',
-                    passwordVariable: 'REGISTRY_PASS'
-                )]) {
-
+                    credentialsId: "github-token",
+                    usernameVariable: "REGISTRY_USER",
+                    passwordVariable: "REGISTRY_PASS")
+                ]) {
                     sh """
-                    echo ${REGISTRY_PASS} | docker login ghcr.io \
-                        -u ${REGISTRY_USER} --password-stdin
-
+                    echo ${REGISTRY_PASS} | docker login ghcr.io -u ${REGISTRY_USER} --password-stdin
                     docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
                     docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${REGISTRY}/${IMAGE_NAME}:latest
-
                     docker push ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
                     docker push ${REGISTRY}/${IMAGE_NAME}:latest
                     """
@@ -143,31 +109,16 @@
             }
         }
 
-        stage('Deploy Staging') {
-            when { 
-                branch 'main' 
-            }
+        stage("Deploy Staging") {
+            when { branch "main" }
             steps {
                 echo "Déploiement de ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} en staging..."
-                sh '''
-                # Arrêter le staging précédent proprement
+                sh """
                 docker compose -f docker-compose.yml -p staging down 2>/dev/null || true
-                
-                # Démarrer la nouvelle version
                 docker compose -f docker-compose.yml -p staging up -d
                 echo "Staging disponible sur http://localhost:8001"
-                '''
+                """
             }
-        }
-    }
-
-    post {
-        success {
-            echo 'Pipeline réussi'
-        }
-
-        failure {
-            echo 'Pipeline échoué'
         }
     }
 }
