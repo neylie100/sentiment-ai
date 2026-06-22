@@ -13,12 +13,12 @@ pipeline {
         }
         stage("Install Dependencies") {
             steps {
-                sh "pip install --user -r requirements.txt"
+                sh "python3 -m pip install --user -r requirements.txt"
             }
         }
         stage("Unit Tests") {
             steps {
-                sh "pytest"
+                sh "python3 -m pytest"
             }
         }
         stage("Build Docker Image") {
