@@ -14,7 +14,7 @@ resource "docker_network" "cicd" {
 }
 
 resource "docker_image" "sentiment" {
-  name         = "ghcr.io/VOTRE_PSEUDO/sentiment-ai:${var.image_tag}"
+  name         = "ghcr.io/stella/sentiment-ai:${var.image_tag}"
   keep_locally = true
 }
 
