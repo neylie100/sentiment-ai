@@ -1,4 +1,4 @@
-﻿pipeline {
+pipeline {
     agent any
 
     environment {
@@ -64,7 +64,7 @@
 
         stage("Security Scan") {
             steps {
-                // Version simplifiée et robuste du scan Trivy
+                // Version simplifi?e et robuste du scan Trivy
                 sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --format table ${IMAGE_NAME}:${IMAGE_TAG}"
             }
         }
